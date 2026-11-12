@@ -1,0 +1,196 @@
+nextflow_pipeline {
+
+    name "nf-linear-replicon end-to-end"
+    script "../main.nf"
+
+    // What the test data has planted in it, from assets/test-data/truth.json:
+    // ONE integration at NC_900001.1:20000, joined at construct base 1200,
+    // crossed by 6 reads in SAMPLE1/rep1 and 5 in SAMPLE1/rep2, and absent
+    // from CONTROL. Everything else in those samples is background: one-off
+    // chimeras at random positions, one read each.
+
+    test("the planted integration is found, and only in the samples that carry it") {
+
+        // -output-dir is passed explicitly: the workflow output block does not
+        // pick up params.outdir under nf-test (nextflow-io/nextflow#7069)
+        options "-output-dir $outputDir"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            def rows = { f -> new File("$outputDir/$f").readLines().drop(1).findAll { it.trim() } }
+
+            // --- the junction table -------------------------------------
+            def positions = rows('results/junction_positions.csv').collect { it.split(',') }
+            def planted = positions.findAll { it[1] == 'NC_900001.1' && Math.abs((it[2] as int) - 20000) <= 100 }
+
+            // one row per sample that carries it, and the control is not one
+            assert planted.size() == 2
+            assert planted.collect { it[0] }.sort() == ['SAMPLE1__rep1__barcode01', 'SAMPLE1__rep2__barcode02']
+            assert planted.every { !it[0].startsWith('CONTROL') }
+
+            // every planted read is recovered, on both sides, at MAPQ 60
+            assert planted.find { it[0].contains('rep1') }[3] as int == 6
+            assert planted.find { it[0].contains('rep2') }[3] as int == 5
+            assert planted.every { (it[4] as int) == 60 }
+            assert planted.every { (it[5] as int) >= 500 && (it[8] as int) >= 500 }
+
+            // construct_to is the construct base the reads break at: fixed at
+            // 1200 by construction, and the same in both libraries
+            assert planted.every { (it[7] as int) == 1200 }
+
+            // the control's junctions are all one-off chimeras
+            def control = positions.findAll { it[0].startsWith('CONTROL') }
+            assert control.every { (it[3] as int) == 1 }
+
+            // --- the distribution table ---------------------------------
+            // Every sample appears, including one with no multi-read position.
+            def distribution = rows('results/junction_positions_distribution.csv')
+            assert distribution.size() == 3
+            assert distribution.find { it.startsWith('SAMPLE1__rep1') }.split(',')[6] as int == 1   // one 6-read position
+            assert distribution.find { it.startsWith('SAMPLE1__rep2') }.split(',')[5] as int == 1   // one 5-read position
+            assert distribution.find { it.startsWith('CONTROL') }.split(',')[2..7].every { it as int == 0 }
+
+            // --- best supported first -----------------------------------
+            def candidates = rows('results/junction_positions_candidates.csv')
+            assert candidates.take(2).every { it.split(',')[2] as int == 20001 }
+
+            // --- the recurrence matrix ----------------------------------
+            // The planted locus tops it: most samples, then most reads.
+            def matrix = rows('results/junction_matrix.csv').collect { it.split(',') }
+            def top = matrix.first()
+            assert top[0] == 'NC_900001.1'
+            assert Math.abs((top[1] as int) - 20000) <= 100
+            assert top[-1] as int == 2        // n_samples: both SAMPLE1 libraries
+            assert top[-2] as int == 11       // total_reads: 6 + 5
+            assert top[2] as int == 0         // ...and nothing in the control column
+
+            // --- the per-sample summary ---------------------------------
+            def summary = rows('results/junction_summary.csv').collect { it.split(',') }
+            assert summary.size() == 3
+            assert summary.every { (it[2] as int) > 0 }   // construct reads seen in every sample
+
+            // --- the shape of the published run -------------------------
+            def names = { sub -> (new File("$outputDir/$sub").list() ?: []) as List }
+            assert names('').containsAll(['aligned', 'qc', 'ref', 'results', 'subset'])
+            assert names('aligned').containsAll(['SAMPLE1__rep1__barcode01.sorted.bam',
+                                                 'SAMPLE1__rep1__barcode01.sorted.bam.bai'])
+            assert names('subset').containsAll(['SAMPLE1__rep1__barcode01.construct_reads.bam',
+                                                'SAMPLE1__rep1__barcode01.split.bam',
+                                                'SAMPLE1__rep1__barcode01.names.txt'])
+            assert names('qc/flagstat').size() == 3
+
+            // The construct shares no sequence with this genome, and the
+            // homology report has to say so rather than be absent.
+            assert new File("$outputDir/ref/cho_mini__LP247_mini.homology.txt").text.contains('0 alignment(s)')
+
+            // The architecture report is on in the test profile, and must have
+            // called the locus independently of the junction table.
+            def architecture = new File("$outputDir/results/architecture/SAMPLE1__rep1__barcode01.architecture.txt").text
+            assert architecture.contains('NC_900001.1:20001')
+            assert architecture =~ /reads 6\s+independent molecules 6/
+        }
+    }
+
+    test("unaligned BAM input gives the same junction as the FASTQs") {
+
+        options "-output-dir $outputDir"
+
+        when {
+            params {
+                outdir      = "$outputDir"
+                // the same reads as SAMPLE1/rep1, as dorado's bam_pass writes them
+                samplesheet = "${projectDir}/assets/samplesheet_test_ubam.csv"
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            // minimap2 cannot read BAM, so this route goes through SAMTOOLS_FASTQ
+            assert workflow.trace.tasks().any { it.name.startsWith('SAMTOOLS_FASTQ') }
+
+            def positions = new File("$outputDir/results/junction_positions.csv").readLines()
+                .drop(1).collect { it.split(',') }
+            def planted = positions.find { it[1] == 'NC_900001.1' && Math.abs((it[2] as int) - 20000) <= 100 }
+
+            assert planted != null
+            assert planted[3] as int == 6
+            assert planted[7] as int == 1200
+        }
+    }
+
+    test("the length filter is what removes the background") {
+
+        options "-output-dir $outputDir"
+
+        when {
+            params {
+                outdir   = "$outputDir"
+                // The planted junctions carry at most 1200 bp of construct, so
+                // a 2000 bp floor must drop every one of them. If this test
+                // still finds junctions, the threshold is not being applied.
+                junction = [min_genome_bp: 500, min_construct_bp: 2000, group_within: 100,
+                            min_mapping_quality: 60, min_reads_to_shortlist: 1, max_rows_to_print: 60]
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            def positions = new File("$outputDir/results/junction_positions.csv").readLines().drop(1)
+            assert !positions.any { it.split(',')[2] as int == 20001 }
+
+            // ...and every row that does survive clears the raised floor
+            assert positions.every { (it.split(',')[8] as int) >= 2000 }
+
+            // a sample with no junctions at all is still a row in the distribution
+            assert new File("$outputDir/results/junction_positions_distribution.csv").readLines().size() == 4
+        }
+    }
+
+    test("the dorado aligner route drops the FASTQ conversion step") {
+
+        // Stub only: the dorado image is GPU-sized and not something a laptop
+        // or CI runner should pull. What is asserted here is the wiring --
+        // that unaligned BAM goes straight to the aligner.
+        options "-stub-run -output-dir $outputDir"
+
+        when {
+            params {
+                outdir      = "$outputDir"
+                samplesheet = "${projectDir}/assets/samplesheet_test_ubam.csv"
+                alignment   = [tool: 'dorado']
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert workflow.trace.tasks().any { it.name.startsWith('DORADO_ALIGNER') }
+            assert workflow.trace.tasks().every { !it.name.startsWith('SAMTOOLS_FASTQ') }
+            assert workflow.trace.tasks().every { !it.name.startsWith('MINIMAP2_ALIGN') }
+        }
+    }
+
+    test("stub run - the whole graph wires up") {
+
+        options "-stub-run -output-dir $outputDir"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert snapshot(workflow.trace.tasks().collect { it.name }.sort()).match()
+        }
+    }
+}

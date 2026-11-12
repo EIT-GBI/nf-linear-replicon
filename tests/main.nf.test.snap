@@ -1,0 +1,36 @@
+{
+    "stub run - the whole graph wires up": {
+        "content": [
+            [
+                "BUILD_REFERENCE (cho_mini__LP247_mini)",
+                "CHECK_READS (CONTROL__rep1__barcode03)",
+                "CHECK_READS (SAMPLE1__rep1__barcode01)",
+                "CHECK_READS (SAMPLE1__rep2__barcode02)",
+                "CONSTRUCT_HOMOLOGY (cho_mini__LP247_mini)",
+                "EXTRACT_CONSTRUCT_READS (CONTROL__rep1__barcode03)",
+                "EXTRACT_CONSTRUCT_READS (SAMPLE1__rep1__barcode01)",
+                "EXTRACT_CONSTRUCT_READS (SAMPLE1__rep2__barcode02)",
+                "JUNCTION_MATRIX",
+                "JUNCTION_POSITIONS (CONTROL__rep1__barcode03)",
+                "JUNCTION_POSITIONS (SAMPLE1__rep1__barcode01)",
+                "JUNCTION_POSITIONS (SAMPLE1__rep2__barcode02)",
+                "JUNCTION_REPORT",
+                "MINIMAP2_ALIGN (CONTROL__rep1__barcode03)",
+                "MINIMAP2_ALIGN (SAMPLE1__rep1__barcode01)",
+                "MINIMAP2_ALIGN (SAMPLE1__rep2__barcode02)",
+                "READ_ARCHITECTURE (CONTROL__rep1__barcode03)",
+                "READ_ARCHITECTURE (SAMPLE1__rep1__barcode01)",
+                "READ_ARCHITECTURE (SAMPLE1__rep2__barcode02)",
+                "SAMTOOLS_FAIDX (cho_mini__LP247_mini)",
+                "SAMTOOLS_FLAGSTAT (CONTROL__rep1__barcode03)",
+                "SAMTOOLS_FLAGSTAT (SAMPLE1__rep1__barcode01)",
+                "SAMTOOLS_FLAGSTAT (SAMPLE1__rep2__barcode02)"
+            ]
+        ],
+        "timestamp": "2026-11-12T10:42:07.243665",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "25.10.4"
+        }
+    }
+}

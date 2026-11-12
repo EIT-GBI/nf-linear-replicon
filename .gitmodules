@@ -1,0 +1,9 @@
+[submodule "modules/samtools"]
+	path = modules/samtools
+	url = https://github.com/EIT-GBI/nf-mod-samtools.git
+[submodule "modules/minimap2"]
+	path = modules/minimap2
+	url = https://github.com/EIT-GBI/nf-mod-minimap2.git
+[submodule "modules/dorado"]
+	path = modules/dorado
+	url = https://github.com/EIT-GBI/nf-mod-dorado.git

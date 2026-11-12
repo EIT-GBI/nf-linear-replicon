@@ -1,0 +1,9 @@
+params.local.yaml
+.nextflow.log*
+work/
+.nextflow*
+results*/
+slurm-*.out
+.nf-test/
+.nf-test.log
+__pycache__/

@@ -1,0 +1,2 @@
+sample,readset,barcode,reference_genome,additional_reference,fastq_path
+SAMPLE1,rep1,barcode01,cho_mini,LP247_mini,test-data/ubam/SAMPLE1__rep1__barcode01

@@ -1,0 +1,4 @@
+sample,readset,barcode,reference_genome,additional_reference,fastq_path
+SAMPLE1,rep1,barcode01,cho_mini,LP247_mini,test-data/fastq/SAMPLE1__rep1__barcode01
+SAMPLE1,rep2,barcode02,cho_mini,LP247_mini,test-data/fastq/SAMPLE1__rep2__barcode02
+CONTROL,rep1,barcode03,cho_mini,LP247_mini,test-data/fastq/CONTROL__rep1__barcode03

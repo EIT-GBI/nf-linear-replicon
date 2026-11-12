@@ -1,0 +1,61 @@
+{
+  "integration": {
+    "contig": "NC_900001.1",
+    "position": 20000,
+    "construct_position": 1200
+  },
+  "construct_contig": "LP247_mini",
+  "samples": {
+    "SAMPLE1__rep1__barcode01": {
+      "junction_reads": 6,
+      "chimeras": [
+        {
+          "contig": "NC_900001.1",
+          "position": 30570
+        },
+        {
+          "contig": "NW_900003.1",
+          "position": 4672
+        },
+        {
+          "contig": "NW_900003.1",
+          "position": 1285
+        }
+      ]
+    },
+    "SAMPLE1__rep2__barcode02": {
+      "junction_reads": 5,
+      "chimeras": [
+        {
+          "contig": "NC_900001.1",
+          "position": 29278
+        },
+        {
+          "contig": "NC_900001.1",
+          "position": 12311
+        },
+        {
+          "contig": "NC_900001.1",
+          "position": 10702
+        }
+      ]
+    },
+    "CONTROL__rep1__barcode03": {
+      "junction_reads": 0,
+      "chimeras": [
+        {
+          "contig": "NW_900003.1",
+          "position": 2533
+        },
+        {
+          "contig": "NC_900001.1",
+          "position": 33421
+        },
+        {
+          "contig": "NC_900002.1",
+          "position": 20001
+        }
+      ]
+    }
+  }
+}

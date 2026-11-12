@@ -1,0 +1,36 @@
+# Ready-made parameters for the bundled example dataset.
+#
+# This is a real run, set up exactly as you would set up your own: a folder of
+# reads per sample, two FASTAs, and this file. Only the data is small -- a
+# 75 kb "genome", a 6 kb construct, and one integration planted at a position
+# written down in assets/test-data/truth.json.
+#
+#   nextflow run . -params-file params.example.yaml -profile local
+#
+# If the pipeline works with this file but not with yours, compare the two side
+# by side. The only lines you normally need to change are the paths.
+
+samplesheet:   './assets/samplesheet_test.csv'
+reference_dir: './assets/test-data/references'
+outdir:        './results-example'
+
+# How the construct contig is told apart from the host's contigs
+host_contig_prefixes: ['NC_', 'NW_']
+
+alignment:
+  tool: 'minimap2'
+
+junction:
+  min_genome_bp: 500
+  min_construct_bp: 500
+  group_within: 100
+  min_mapping_quality: 60
+  min_reads_to_shortlist: 1
+  max_rows_to_print: 60
+
+matrix:
+  cluster_tolerance: 2000
+  min_total_reads: 2
+
+architecture:
+  enabled: true

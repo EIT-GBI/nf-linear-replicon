@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (Nextflow strict syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: nf-core/setup-nextflow@v3
+        with:
+          version: '25.10.4'
+
+      - name: nextflow lint
+        run: nextflow lint -o concise main.nf nextflow.config conf modules/local
+
+      - name: Submodules match modules.versions
+        # A PR that changes a version in modules.versions must move the
+        # submodule with it, or this CI tests the old module.
+        run: bash .github/scripts/check_submodules.sh
+
+      - name: No unpinned container images
+        # Every process must resolve to a specific image version. Guards against
+        # :latest creeping back in, which would make a given pipeline revision
+        # silently pick up different software over time.
+        run: |
+          nextflow inspect main.nf -profile test 2>/dev/null \
+            | python3 .github/scripts/check_containers.py
+
+  test:
+    name: Run pipeline (Nextflow ${{ matrix.NXF_VER }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor declared in manifest.nextflowVersion, and a recent release
+        NXF_VER: ['25.04.0', '25.10.4']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: nf-core/setup-nextflow@v3
+        with:
+          version: ${{ matrix.NXF_VER }}
+
+      - name: End-to-end run on the planted test data
+        run: nextflow run . -profile test,docker --outdir results_ci
+
+      - name: The planted integration is in the output
+        run: |
+          set -euo pipefail
+          for d in aligned ref subset results qc/flagstat qc/contigs; do
+            if [ ! -d "results_ci/$d" ]; then
+              echo "::error::expected published directory missing: $d"
+              exit 1
+            fi
+          done
+          # NC_900001.1:20000 +/- the grouping window, in both SAMPLE1 libraries
+          hits=$(awk -F, 'NR > 1 && $2 == "NC_900001.1" && $3 > 19900 && $3 < 20100' \
+                   results_ci/results/junction_positions.csv | wc -l)
+          test "$hits" -eq 2
+          # ...and nothing like it in the control
+          ! grep -q '^CONTROL.*,NC_900001.1,200' results_ci/results/junction_positions.csv
+          echo "Planted integration recovered"
+
+      - name: Unaligned BAM input (bam_pass route)
+        run: |
+          set -euo pipefail
+          nextflow run . -profile test,docker \
+            --samplesheet "$PWD/assets/samplesheet_test_ubam.csv" \
+            --outdir results_ubam
+          test -s results_ubam/results/junction_positions.csv
+
+      - name: publishDir must not creep back in
+        # Publishing belongs in the output block in main.nf. The dorado module
+        # is the one exception, and it is a submodule we do not edit.
+        run: |
+          if grep -rn "publishDir" --include='*.nf' main.nf modules/local; then
+            echo "::error::publishDir found; publishing belongs in the output block in main.nf"
+            exit 1
+          fi
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextflow-log-${{ matrix.NXF_VER }}
+          path: .nextflow.log
+          if-no-files-found: ignore
+
+  nf-test:
+    name: nf-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: nf-core/setup-nextflow@v3
+        with:
+          version: '25.10.4'
+
+      - uses: nf-core/setup-nf-test@v2
+        with:
+          version: '0.9.5'
+
+      - name: nf-test
+        run: nf-test test --profile test,docker --verbose
+
+  test-data:
+    name: Test data is regenerable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Rebuild from the seed and compare
+        # The data is committed, but it must stay reproducible from the script:
+        # a test that asserts a planted truth is only as good as the planting.
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends samtools
+          python3 scripts/make_test_data.py --outdir /tmp/regenerated
+          # The reads, references and truth must come back byte for byte.
+          diff -r -x 'ubam' assets/test-data /tmp/regenerated
+          # The uBAM cannot: samtools writes the output path into its @PG line,
+          # so compare the records it holds instead.
+          diff <(samtools view assets/test-data/ubam/*/*.bam) \
+               <(samtools view /tmp/regenerated/ubam/*/*.bam)

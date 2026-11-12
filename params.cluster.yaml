@@ -1,0 +1,32 @@
+# A real run on the cluster. Copy this, change the three paths, and run:
+#
+#   nextflow run EIT-GBI/nf-linear-replicon -r v1.0.0 \
+#       -profile cluster -params-file params.cluster.yaml
+#
+# The reference folder holds the host genome and one FASTA per construct. The
+# samplesheet names them in its reference_genome and additional_reference
+# columns, with or without the file extension.
+
+samplesheet:   '/mnt/lustre/users/<you>/wei_linear_replicon/20260928/samplesheet.csv'
+reference_dir: '/mnt/lustre/users/<you>/wei_linear_replicon/ref'
+outdir:        '/mnt/lustre/users/<you>/wei_linear_replicon/20260928/results'
+
+alignment:
+  tool: 'minimap2'
+
+# The defaults. They are here so that a run records the thresholds it used.
+junction:
+  min_genome_bp: 500        # the main false-positive filter: both sides must be long
+  min_construct_bp: 500
+  group_within: 100         # Nanopore breakpoints wobble a few bases
+  min_mapping_quality: 60   # below this is repetitive sequence, not trustworthy
+  min_reads_to_shortlist: 1 # 1 keeps the single-read background you judge against
+  max_rows_to_print: 60
+
+matrix:
+  cluster_tolerance: 2000   # breakpoints within this distance are one locus
+  min_total_reads: 2
+
+# Per-read architecture: slower, and worth it once you have a shortlist
+architecture:
+  enabled: false
