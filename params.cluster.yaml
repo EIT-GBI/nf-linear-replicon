@@ -1,15 +1,32 @@
-# A real run on the cluster. Copy this, change the three paths, and run:
+# A real run on the cluster.
 #
-#   nextflow run EIT-GBI/nf-linear-replicon -r v1.0.0 \
-#       -profile cluster -params-file params.cluster.yaml
+# Download this file into your run folder, change the two paths below, and
+# submit from that folder:
+#
+#   curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params.cluster.yaml
+#   nano params.cluster.yaml
+#
+#   export NXF_WORK=/mnt/lustre/users/$USER/nf-work/20260928   # before submitting
+#   module load nextflow
+#   sbatch -J nf-linear-replicon -p cpu -t 2-00:00:00 \
+#     --wrap='nextflow run EIT-GBI/nf-linear-replicon -latest \
+#             -params-file params.cluster.yaml -profile cluster -resume'
+#
+# NXF_WORK is where Nextflow keeps its large temporary data. Point it somewhere
+# separate from this folder so you can delete it in one go when the run is done.
 #
 # The reference folder holds the host genome and one FASTA per construct. The
 # samplesheet names them in its reference_genome and additional_reference
 # columns, with or without the file extension.
+#
+# Full guide: docs/running-the-pipeline.md
 
-samplesheet:   '/mnt/lustre/users/<you>/wei_linear_replicon/20260928/samplesheet.csv'
-reference_dir: '/mnt/lustre/users/<you>/wei_linear_replicon/ref'
-outdir:        '/mnt/lustre/users/<you>/wei_linear_replicon/20260928/results'
+samplesheet:   '/mnt/lustre/users/<you>/data/wei_linear_replicon/20260928/samplesheet.csv'
+reference_dir: '/mnt/lustre/users/<you>/references/wei_linear_replicon'
+
+# Results are published as hard links into the work folder, and a hard link
+# cannot cross filesystems -- so keep outdir inside the run folder.
+outdir:        './results'
 
 alignment:
   tool: 'minimap2'

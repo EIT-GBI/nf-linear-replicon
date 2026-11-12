@@ -55,17 +55,51 @@ flowchart TD
 
 ## Run it
 
+Full step-by-step guide, written for someone who has not used Nextflow:
+**[docs/running-the-pipeline.md](docs/running-the-pipeline.md)**. The short
+version, on the cluster:
+
 ```bash
-# on the cluster
-nextflow run EIT-GBI/nf-linear-replicon -r v1.0.0 \
-    -profile cluster -params-file params.cluster.yaml
+# 1. a run folder for your settings and results, and a SEPARATE work folder for
+#    Nextflow's large temporary data, so you can delete it in one go later.
+#    Keep outdir inside the run folder: results are published as hard links
+#    into the work folder, and a hard link cannot cross filesystems.
+DATASET_NAME=20260928
+RUN_DIR=/mnt/lustre/users/$USER/data/wei_linear_replicon/$DATASET_NAME
+export NXF_WORK=/mnt/lustre/users/$USER/nf-work/$DATASET_NAME
+mkdir -p $RUN_DIR $NXF_WORK
+cd $RUN_DIR
 
-# on a laptop, with Docker
-nextflow run EIT-GBI/nf-linear-replicon -profile docker \
-    --samplesheet samplesheet.csv --reference_dir ref --outdir results
+# 2. your samplesheet (see below) goes here, then fetch the settings file and
+#    edit the three paths at the top of it
+curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params.cluster.yaml
+nano params.cluster.yaml
 
-# the bundled example, with minimap2/samtools/python3 from $PATH
-nextflow run . -profile test,local
+# 3. submit. One Slurm job, which is Nextflow itself; it submits the rest.
+module load nextflow
+sbatch -J nf-linear-replicon -p cpu -t 2-00:00:00 \
+  --wrap='nextflow run EIT-GBI/nf-linear-replicon -latest -params-file params.cluster.yaml -profile cluster -resume'
+```
+
+`-resume` reuses everything already finished, so changing a threshold re-runs
+the analysis in minutes without realigning anything.
+
+On a laptop, the same shape — a folder, the params file edited in it, and a work
+folder of your choosing:
+
+```bash
+mkdir -p ~/my-run && cd ~/my-run
+curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params.cluster.yaml
+nano params.cluster.yaml
+export NXF_WORK=~/nf-work/my-run
+nextflow run EIT-GBI/nf-linear-replicon -latest -params-file params.cluster.yaml -profile docker -resume
+```
+
+Or try the bundled example first, which has an integration planted at a known
+position:
+
+```bash
+nextflow run . -profile test,docker     # or test,local for no containers at all
 ```
 
 `-profile local` runs without any container, using the tools on your `$PATH`.
@@ -222,6 +256,7 @@ modules/samtools|minimap2|dorado   nf-mod-* git submodules (do not edit)
 modules/local/              the steps with no module of their own
 scripts/make_test_data.py   rebuilds assets/test-data from a fixed seed
 tests/main.nf.test          nf-test suite
+docs/running-the-pipeline.md   step-by-step guide for running it
 ```
 
 `modules/local/*` are ports of the cluster shell scripts, one process each, with
