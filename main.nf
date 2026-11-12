@@ -269,10 +269,7 @@ workflow {
     reference       = BUILD_REFERENCE.out.fasta.map { _tag, fasta -> fasta }
     reference_fai   = SAMTOOLS_FAIDX.out.fai
     homology        = CONSTRUCT_HOMOLOGY.out.report
-    // DORADO_ALIGNER carries a publishDir of its own (it is a submodule, so
-    // not ours to change) and already writes to <outdir>/aligned. Publishing
-    // the same files from here as well would write each BAM twice.
-    alignment       = params.alignment.tool == 'dorado' ? channel.empty() : bam_ch
+    alignment       = bam_ch
     flagstat        = SAMTOOLS_FLAGSTAT.out.flagstat
     subset          = EXTRACT_CONSTRUCT_READS.out.construct_reads
     split           = EXTRACT_CONSTRUCT_READS.out.split
