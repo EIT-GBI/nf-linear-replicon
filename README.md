@@ -18,21 +18,20 @@ those pairs.
 ```mermaid
 flowchart TD
     A[samplesheet.csv] --> B[BUILD_REFERENCE<br/><i>genome + construct in one FASTA</i>]
-    A --> C[CHECK_READS<br/><i>gzip -t / samtools quickcheck</i>]
+    A --> C[PREPARE_READS<br/><i>quickcheck / gzip -t, then one file per sample</i>]
     B --> D[CONSTRUCT_HOMOLOGY<br/><i>construct vs genome: shared sequence</i>]
     B --> E[SAMTOOLS_FAIDX]
 
-    C --> F{reads are BAM?}
-    F -->|yes, minimap2| G[SAMTOOLS_FASTQ<br/><i>-T MM,ML</i>]
-    F -->|no| H[FASTQs]
-    G --> I
-    H --> I
-    B --> I[MINIMAP2_ALIGN<br/><i>-Y -L --MD --secondary=no</i>]
-    F -->|alignment.tool = dorado| I2[DORADO_ALIGNER<br/><i>reads BAM and FASTQ alike</i>]
+    C --> F{alignment.tool}
+    F -->|dorado, default| G[DORADO_ALIGNER<br/><i>reads unaligned BAM directly</i>]
+    F -->|minimap2| H[MINIMAP2_ALIGN<br/><i>-Y -L --MD --secondary=no</i>]
+    B --> G
+    B --> H
 
+    G --> I[sorted BAM + index]
+    H --> I
     I --> J[SAMTOOLS_FLAGSTAT]
     I --> K[EXTRACT_CONSTRUCT_READS<br/><i>construct_reads.bam + split.bam</i>]
-    I2 --> K
     K --> L[JUNCTION_POSITIONS<br/><i>per sample</i>]
     L --> M[JUNCTION_REPORT<br/><i>distribution + candidates</i>]
     K --> N[JUNCTION_MATRIX<br/><i>recurrence across samples</i>]
@@ -43,8 +42,8 @@ flowchart TD
 |---|---|
 | `BUILD_REFERENCE` | one combined genome+construct FASTA per pair, and the name of the construct contig |
 | `CONSTRUCT_HOMOLOGY` | every alignment between construct and genome. Shared sequence makes fake junctions at a **fixed construct coordinate** in every sample — read this before believing a result |
-| `CHECK_READS` | a truncated `.fastq.gz` desynchronises the SAM stream and kills samtools hours later with a misleading error. Caught up front instead |
-| `MINIMAP2_ALIGN` | `-Y` keeps the split pieces soft-clipped, so the sequence either side of a junction stays in the record |
+| `PREPARE_READS` | checks every read file (`samtools quickcheck` / `gzip -t`) — a truncated file otherwise kills samtools hours later with a misleading error — and hands the aligner one file. One file in a folder is just renamed; several are joined with `samtools cat`, a BGZF block copy |
+| `DORADO_ALIGNER` / `MINIMAP2_ALIGN` | dorado reads unaligned BAM directly, so `bam_pass` needs no FASTQ round trip. minimap2 adds `-Y`, which keeps the split pieces soft-clipped so the sequence either side of a junction stays in the record |
 | `EXTRACT_CONSTRUCT_READS` | the two small BAMs: every alignment of every read touching the construct, and of those, the reads broken across two places |
 | `JUNCTION_POSITIONS` | per sample: every genome position where the construct joins the genome, with read support |
 | `JUNCTION_REPORT` | those tables pooled: the distribution table and the shortlist |
@@ -121,6 +120,17 @@ CONTROL,20260928,barcode09,CHOWT_genome,LP247_maxi,/path/to/run/fastq_pass/barco
 | `reference_genome`, `additional_reference` | file names under `--reference_dir`. The extension may be left off: `.fa`, `.fasta`, `.fna` and their `.gz` forms are all tried |
 | `fastq_path` | a **folder**, searched recursively. A relative path is taken relative to the samplesheet |
 
+**Headers are matched loosely**, as the cluster scripts matched them:
+case-insensitively, trimmed, CRLF- and BOM-safe, and **by prefix** — so
+`Sample`, `ReadSet` and `additional_reference_sequence` all work, as do
+`additional_reference` and `additional_reference_name`. A column that cannot be
+matched is a hard error listing the headers that were found.
+
+**Sample names are reduced to a safe token for file names**: instrument
+samplesheets carry things like `CHOWT genome +LP PRD1 maxi (0.1%)`, which would
+otherwise reach file names and command lines. That becomes
+`CHOWT_genome_LP_PRD1_maxi_0.1`; the original is kept in the sample metadata.
+
 **`fastq_path` may point at `bam_pass` instead of `fastq_pass`.** Dorado writes
 unaligned BAM by default now. The column name does not change: FASTQs are looked
 for first and `*.bam` is the fallback, and FASTQ wins if a folder holds both.
@@ -130,20 +140,23 @@ precheck.
 
 ### Choosing the aligner
 
-`params.alignment.tool` is `minimap2` (default) or `dorado`.
+`params.alignment.tool` is `dorado` (default) or `minimap2`.
 
-minimap2 is the tested path, and the one the flags are written for: `-Y`,
-`--secondary=no`, `--MD`. Unaligned BAM is converted by `SAMTOOLS_FASTQ` first.
+**dorado** is `dorado aligner`, which is minimap2 inside. It reads unaligned BAM
+directly, so a `bam_pass` run never becomes FASTQ and the `MM`/`ML`
+modified-base tags are never touched. It takes one reads file, which
+`PREPARE_READS` has already seen to. It runs on CPU — only basecalling needs a
+GPU — so the cluster profile keeps it on the `cpu` queue. It also carries its
+own `publishDir`, being a submodule, so on this route the BAMs are published by
+the module rather than by this pipeline's `output` block.
 
-`dorado aligner` reads FASTQ and unaligned BAM alike, so that conversion step
-disappears — but it takes **one read file per sample**, and an ONT
-`fastq_pass`/`bam_pass` folder usually holds many, so the pipeline stops with a
-clear error rather than aligning a fraction of the reads. It also does not
-expose the minimap2 flags above. Use it when a sample is one BAM; otherwise stay
-on the default. (The module also carries its own `publishDir`, so its BAMs
-appear under `params.outdir/aligned` whatever `-output-dir` says.)
+**minimap2** is the alternative, and the path the explicit flags are written
+for: `-Y -L --MD --secondary=no`. It cannot read BAM, so `PREPARE_READS` decodes
+a `bam_pass` row to FASTQ first, carrying the tags with `-T MM,ML`. This is the
+route the end-to-end tests exercise, because it runs without the dorado image.
 
----
+Neither choice changes what the junction steps see: they filter with `-F 0x104`,
+which drops secondary alignments whatever the aligner emitted.
 
 ## Reading the result
 

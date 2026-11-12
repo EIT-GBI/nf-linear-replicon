@@ -14,13 +14,12 @@
 include { DORADO_ALIGNER     } from './modules/dorado/aligner/main.nf'
 include { MINIMAP2_ALIGN     } from './modules/minimap2/align/main.nf'
 include { SAMTOOLS_FAIDX     } from './modules/samtools/faidx/main.nf'
-include { SAMTOOLS_FASTQ     } from './modules/samtools/fastq/main.nf'
 include { SAMTOOLS_FLAGSTAT  } from './modules/samtools/flagstat/main.nf'
 
 //
 // Modules local to this pipeline
 //
-include { CHECK_READS              } from './modules/local/check_reads/main.nf'
+include { PREPARE_READS            } from './modules/local/prepare_reads/main.nf'
 include { BUILD_REFERENCE          } from './modules/local/build_reference/main.nf'
 include { CONSTRUCT_HOMOLOGY       } from './modules/local/construct_homology/main.nf'
 include { EXTRACT_CONSTRUCT_READS  } from './modules/local/extract_construct_reads/main.nf'
@@ -54,6 +53,45 @@ def pairTag(genome, construct) {
     def genome_name    = genome.name.replaceFirst(/\.(fa|fasta|fna)(\.gz)?$/, '')
     def construct_name = construct.name.replaceFirst(/\.(fa|fasta|fna)(\.gz)?$/, '')
     return "${genome_name}__${construct_name}"
+}
+
+// One samplesheet column, matched the way the cluster scripts matched it:
+// case-insensitive, trimmed, CRLF- and BOM-safe, and BY PREFIX -- so
+// `additional_reference`, `additional_reference_name` and
+// `additional_reference_sequence` are all the same column. Instrument-written
+// samplesheets vary, and an unmatched column reaching the pipeline as null is
+// how this went wrong before.
+def normaliseHeader(key) {
+    return key?.toString()?.replace('\uFEFF', '')?.trim()?.toLowerCase()?.replaceAll(/[^a-z0-9]/, '') ?: ''
+}
+
+def column(Map row, String want) {
+    def wanted = want.toLowerCase().replaceAll(/[^a-z0-9]/, '')
+
+    def hit = row.find { key, _value -> normaliseHeader(key) == wanted }
+    if (!hit)
+        hit = row.find { key, _value -> normaliseHeader(key).startsWith(wanted) }
+
+    def value = hit?.value?.toString()?.replace('\r', '')?.trim()
+    return value ?: null
+}
+
+// The same, but a missing column is a hard error naming the headers that are
+// there -- far easier to act on than a null three steps downstream.
+def requiredColumn(Map row, String want) {
+    def value = column(row, want)
+    if (!value)
+        error "Samplesheet has no '${want}' column, or the value is empty in one row.\n" +
+              "       Columns found: ${row.keySet().join(', ')}"
+    return value
+}
+
+// Sample names come from instrument samplesheets and carry spaces, brackets,
+// '+' and '%'. They end up in file names and on command lines, so they are
+// reduced to a safe token here. The original is kept in meta.sample_name.
+def safeName(String name) {
+    def safe = name.replaceAll(/[^A-Za-z0-9._-]+/, '_').replaceAll(/^_+/, '').replaceAll(/_+$/, '')
+    return safe ?: 'unnamed'
 }
 
 // The reads for one samplesheet row. fastq_path is a FOLDER, and may hold
@@ -91,6 +129,14 @@ workflow {
         error "You must set params.reference_dir: the folder holding the genome and construct FASTAs."
     if (!params.samplesheet)
         error "You must set params.samplesheet."
+
+    // A folder here is the easy mistake -- the run folder rather than the CSV
+    // inside it -- and without this check it surfaces as a Java stack trace
+    // from splitCsv ("Is a directory") with nothing naming the parameter.
+    def samplesheet_path = file(params.samplesheet)
+    if (samplesheet_path.isDirectory())
+        error "params.samplesheet is a folder, not a CSV file: ${params.samplesheet}\n" +
+              "       Point it at the samplesheet itself, e.g. ${params.samplesheet}/samplesheet.csv"
     if (!(params.alignment.tool in ['minimap2', 'dorado']))
         error "Invalid value for params.alignment.tool: ${params.alignment.tool}. Use 'minimap2' or 'dorado'."
 
@@ -104,24 +150,26 @@ workflow {
         // drop entirely blank rows (trailing ",,," lines are common in exported CSVs)
         .filter { row -> row.values().any { v -> v?.toString()?.trim() } }
         .map { row ->
-            def genome    = resolveReference(row.reference_genome)
-            def construct = resolveReference(row.additional_reference)
+            def sample    = requiredColumn(row, 'sample')
+            def genome    = resolveReference(requiredColumn(row, 'reference_genome'))
+            def construct = resolveReference(requiredColumn(row, 'additional'))
 
             // Sample names repeat across ReadSets (same clone, two runs), so
             // outputs are keyed on all three or they collide.
-            def readset = row.readset ?: 'readset'
-            def barcode = row.barcode ?: 'barcode'
+            def readset = column(row, 'readset') ?: 'readset'
+            def barcode = column(row, 'barcode') ?: 'barcode'
 
             def meta = [
-                id       : "${row.sample}__${readset}__${barcode}",
-                sample   : row.sample,
-                readset  : readset,
-                barcode  : barcode,
-                tag      : pairTag(genome, construct),
-                platform : row.platform ?: 'ONT',
-                preset   : params.preset,
+                id          : "${safeName(sample)}__${safeName(readset)}__${safeName(barcode)}",
+                sample      : safeName(sample),
+                sample_name : sample,
+                readset     : readset,
+                barcode     : barcode,
+                tag         : pairTag(genome, construct),
+                platform    : column(row, 'platform') ?: 'ONT',
+                preset      : params.preset,
             ]
-            tuple(meta, genome, construct, readsIn(row.fastq_path, samplesheet_dir))
+            tuple(meta, genome, construct, readsIn(requiredColumn(row, 'fastq_path'), samplesheet_dir))
         }
 
     // ---------------------------------------------------------------------
@@ -148,53 +196,15 @@ workflow {
     // ---------------------------------------------------------------------
     // Step 2: reads -> one sorted BAM per row
     // ---------------------------------------------------------------------
-    // A truncated .fastq.gz desynchronises the SAM stream and samtools dies
-    // hours later with a misleading "CIGAR and query sequence are of different
-    // length". Checked up front instead, per file.
-    CHECK_READS(rows_ch.map { meta, _g, _c, reads -> tuple(meta + [read_type: reads.type], reads.files) })
+    // Every row's read files are checked and joined into ONE file first: both
+    // aligners take a single reads argument, and a bam_pass/barcodeNN folder
+    // holds many. For dorado that join is `samtools cat` (BGZF block copy, tags
+    // intact); for minimap2 the BAMs have to be decoded to FASTQ.
+    PREPARE_READS(rows_ch.map { meta, _genome, _construct, reads ->
+        tuple(meta + [read_type: reads.type], reads.files)
+    })
 
-    if (params.alignment.tool == 'minimap2') {
-        reads_branch = CHECK_READS.out.reads.branch { meta, _files ->
-            fastq: meta.read_type == 'fastq'
-            bam:   true
-        }
-
-        // minimap2 cannot read BAM, and `samtools fastq` takes one file at a
-        // time, so each BAM is converted on its own and the FASTQs regrouped
-        // per row. ext.args carries -T MM,ML here and -y on the aligner, so
-        // modified-base tags survive the round trip.
-        bam_parts_ch = reads_branch.bam
-            .flatMap { meta, bams ->
-                // One staged file comes through as a bare Path, and a Path
-                // iterates over its own name components, so normalise first.
-                def list = (bams instanceof List) ? bams : [bams]
-                list.withIndex().collect { bam, i -> tuple(meta + [id: "${meta.id}.part${i + 1}"], bam) }
-            }
-        SAMTOOLS_FASTQ(bam_parts_ch)
-
-        converted_ch = SAMTOOLS_FASTQ.out.reads
-            .map { meta, fastq -> tuple(meta + [id: meta.id.replaceFirst(/\.part\d+$/, '')], fastq) }
-            .groupTuple()
-            .map { meta, fastqs -> tuple(meta, fastqs.sort { fastq -> fastq.name }) }
-
-        reads_to_align = reads_branch.fastq.mix(converted_ch)
-    }
-    else {
-        // dorado aligner reads FASTQ and unaligned BAM alike, so the conversion
-        // step disappears. It takes ONE reads argument, though, and a
-        // fastq_pass / bam_pass folder usually holds many files -- hence the
-        // check below rather than a silently truncated alignment.
-        reads_to_align = CHECK_READS.out.reads.map { meta, reads ->
-            if (reads instanceof List && reads.size() > 1)
-                error "${meta.id}: params.alignment.tool = 'dorado' takes one read file per row, " +
-                      "but ${reads.size()} were found under fastq_path. Use the default 'minimap2'."
-            tuple(meta, reads)
-        }
-    }
-
-    // -Y keeps split pieces soft-clipped, so the sequence either side of a
-    // junction stays in the record; see ext.args in nextflow.config.
-    align_in = reads_to_align
+    align_in = PREPARE_READS.out.reads
         .map { meta, reads -> tuple(meta.tag, meta, reads) }
         .combine(reference_ch, by: 0)
         .multiMap { _tag, meta, reads, fasta, fai, construct ->
@@ -202,13 +212,16 @@ workflow {
             fasta: tuple(fasta, fai)
         }
 
-    if (params.alignment.tool == 'minimap2') {
-        MINIMAP2_ALIGN(align_in.reads, align_in.fasta)
-        bam_ch = MINIMAP2_ALIGN.out.bam    // tuple(meta, bam, bai)
+    // Both aligners emit tuple(meta, bam, bai).
+    if (params.alignment.tool == 'dorado') {
+        DORADO_ALIGNER(align_in.reads, align_in.fasta)
+        bam_ch = DORADO_ALIGNER.out.bam
     }
     else {
-        DORADO_ALIGNER(align_in.reads, align_in.fasta)
-        bam_ch = DORADO_ALIGNER.out.bam    // tuple(meta, bam, bai)
+        // -Y keeps the split pieces soft-clipped, so the sequence either side
+        // of a junction stays in the record; see ext.args in nextflow.config.
+        MINIMAP2_ALIGN(align_in.reads, align_in.fasta)
+        bam_ch = MINIMAP2_ALIGN.out.bam
     }
 
     SAMTOOLS_FLAGSTAT(bam_ch.map { meta, bam, _bai -> tuple(meta, bam) })
@@ -256,7 +269,10 @@ workflow {
     reference       = BUILD_REFERENCE.out.fasta.map { _tag, fasta -> fasta }
     reference_fai   = SAMTOOLS_FAIDX.out.fai
     homology        = CONSTRUCT_HOMOLOGY.out.report
-    alignment       = bam_ch
+    // DORADO_ALIGNER carries a publishDir of its own (it is a submodule, so
+    // not ours to change) and already writes to <outdir>/aligned. Publishing
+    // the same files from here as well would write each BAM twice.
+    alignment       = params.alignment.tool == 'dorado' ? channel.empty() : bam_ch
     flagstat        = SAMTOOLS_FLAGSTAT.out.flagstat
     subset          = EXTRACT_CONSTRUCT_READS.out.construct_reads
     split           = EXTRACT_CONSTRUCT_READS.out.split

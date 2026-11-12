@@ -17,6 +17,8 @@ outdir:        './results-example'
 # How the construct contig is told apart from the host's contigs
 host_contig_prefixes: ['NC_', 'NW_']
 
+# minimap2 here, not the dorado default: the example is meant to run on a
+# laptop, and dorado needs its (large) container image.
 alignment:
   tool: 'minimap2'
 

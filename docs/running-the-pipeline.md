@@ -187,6 +187,17 @@ CONTROL,20260928,barcode09,CHOWT_genome,LP247_maxi,/mnt/lustre/.../20260928/fast
 A relative `fastq_path` is taken relative to the samplesheet, so a samplesheet
 and its reads can move together.
 
+**You do not have to rename your columns.** Headers are matched
+case-insensitively, trimmed, CRLF- and BOM-safe, and by prefix, so an
+instrument-written sheet with `Sample`, `ReadSet` and
+`additional_reference_sequence` is read correctly as it stands. A column that
+cannot be matched stops the run with a message listing the headers it did find.
+
+**Sample names with spaces and brackets are fine too.** A name like
+`CHOWT genome +LP PRD1 maxi (0.1%)` becomes `CHOWT_genome_LP_PRD1_maxi_0.1` in
+file names — those characters would otherwise end up on a command line — and
+outputs stay keyed on `sample__readset__barcode`.
+
 ---
 
 ## Step 5 — Download the settings file and edit it
@@ -219,7 +230,7 @@ the thresholds it was given. The ones worth knowing:
 | `matrix: cluster_tolerance` | 2000 bp. Breakpoints this close are called one locus |
 | `matrix: min_total_reads` | 2. Clusters with fewer reads in total are dropped from the matrix |
 | `architecture: enabled` | `false`. Set `true` for the per-read structure report once you have a shortlist |
-| `alignment: tool` | `minimap2`. Leave it unless a sample is a single BAM file |
+| `alignment: tool` | `dorado` (default), which reads your `bam_pass` BAMs directly. `minimap2` is the alternative and decodes them to FASTQ first |
 
 Save with `Ctrl-O`, `Enter`, then `Ctrl-X`.
 

@@ -86,6 +86,19 @@ jobs:
             --outdir results_ubam
           test -s results_ubam/results/junction_positions.csv
 
+      - name: The dorado route, for real
+        # The pipeline default, and the one route the nf-test suite can only
+        # stub (the image is too large for a laptop). CI is where it gets run.
+        run: |
+          set -euo pipefail
+          nextflow run . -profile test,docker \
+            --samplesheet "$PWD/assets/samplesheet_test_ubam.csv" \
+            --alignment.tool dorado \
+            --outdir results_dorado
+          # same planted integration, found through a different aligner
+          awk -F, 'NR > 1 && $2 == "NC_900001.1" && $3 > 19900 && $3 < 20100' \
+            results_dorado/results/junction_positions.csv | grep -q .
+
       - name: publishDir must not creep back in
         # Publishing belongs in the output block in main.nf. The dorado module
         # is the one exception, and it is a submodule we do not edit.

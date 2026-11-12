@@ -1,0 +1,3 @@
+Sample,ReadSet,barcode,reference_genome,additional_reference_sequence,fastq_path
+CHOWT genome +LP PRD1 maxi (0.1%),20261023_Wei_Linear_replicon,barcode01,cho_mini,LP247_mini,test-data/fastq/SAMPLE1__rep1__barcode01
+CHOWT genome,20261023_Wei_Linear_replicon,barcode03,cho_mini,LP247_mini,test-data/fastq/CONTROL__rep1__barcode03

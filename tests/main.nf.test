@@ -113,8 +113,9 @@ nextflow_pipeline {
         then {
             assert workflow.success
 
-            // minimap2 cannot read BAM, so this route goes through SAMTOOLS_FASTQ
-            assert workflow.trace.tasks().any { it.name.startsWith('SAMTOOLS_FASTQ') }
+            // minimap2 cannot read BAM, so PREPARE_READS decodes it -- once per
+            // sample, not once per BAM file
+            assert workflow.trace.tasks().count { it.name.startsWith('PREPARE_READS') } == 1
 
             def positions = new File("$outputDir/results/junction_positions.csv").readLines()
                 .drop(1).collect { it.split(',') }
@@ -155,11 +156,11 @@ nextflow_pipeline {
         }
     }
 
-    test("the dorado aligner route drops the FASTQ conversion step") {
+    test("the dorado route is wired up, and keeps the reads as BAM") {
 
-        // Stub only: the dorado image is GPU-sized and not something a laptop
-        // or CI runner should pull. What is asserted here is the wiring --
-        // that unaligned BAM goes straight to the aligner.
+        // Stub only: the dorado image is large and not something a laptop
+        // should pull. What is asserted here is the wiring. CI runs this route
+        // for real against the container.
         options "-stub-run -output-dir $outputDir"
 
         when {
@@ -173,8 +174,41 @@ nextflow_pipeline {
         then {
             assert workflow.success
             assert workflow.trace.tasks().any { it.name.startsWith('DORADO_ALIGNER') }
-            assert workflow.trace.tasks().every { !it.name.startsWith('SAMTOOLS_FASTQ') }
             assert workflow.trace.tasks().every { !it.name.startsWith('MINIMAP2_ALIGN') }
+
+            // the reads still go through PREPARE_READS -- it checks them and
+            // hands over one file -- but on this route nothing is decoded
+            assert workflow.trace.tasks().any { it.name.startsWith('PREPARE_READS') }
+        }
+    }
+
+    test("an instrument samplesheet: odd headers, CRLF, and sample names with spaces") {
+
+        // The shape a real run arrives in: `Sample`/`ReadSet` capitalised,
+        // the construct column called `additional_reference_sequence`, CRLF
+        // line endings, and sample names carrying spaces, '+', brackets and
+        // '%' -- all of which reach file names and command lines.
+        options "-output-dir $outputDir"
+
+        when {
+            params {
+                outdir      = "$outputDir"
+                samplesheet = "${projectDir}/assets/samplesheet_test_messy_headers.csv"
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            def names = { sub -> (new File("$outputDir/$sub").list() ?: []) as List }
+
+            // the name is reduced to a safe token, and nothing unsafe survives
+            assert names('aligned').contains('CHOWT_genome_LP_PRD1_maxi_0.1__20261023_Wei_Linear_replicon__barcode01.sorted.bam')
+            assert names('aligned').every { !(it =~ /[ ()%+]/) }
+
+            // and the columns were still found, so the junction was too
+            def positions = new File("$outputDir/results/junction_positions.csv").readLines().drop(1)
+            assert positions.any { it.split(',')[2] as int == 20001 }
         }
     }
 

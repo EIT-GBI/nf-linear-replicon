@@ -3,9 +3,6 @@
         "content": [
             [
                 "BUILD_REFERENCE (cho_mini__LP247_mini)",
-                "CHECK_READS (CONTROL__rep1__barcode03)",
-                "CHECK_READS (SAMPLE1__rep1__barcode01)",
-                "CHECK_READS (SAMPLE1__rep2__barcode02)",
                 "CONSTRUCT_HOMOLOGY (cho_mini__LP247_mini)",
                 "EXTRACT_CONSTRUCT_READS (CONTROL__rep1__barcode03)",
                 "EXTRACT_CONSTRUCT_READS (SAMPLE1__rep1__barcode01)",
@@ -18,6 +15,9 @@
                 "MINIMAP2_ALIGN (CONTROL__rep1__barcode03)",
                 "MINIMAP2_ALIGN (SAMPLE1__rep1__barcode01)",
                 "MINIMAP2_ALIGN (SAMPLE1__rep2__barcode02)",
+                "PREPARE_READS (CONTROL__rep1__barcode03)",
+                "PREPARE_READS (SAMPLE1__rep1__barcode01)",
+                "PREPARE_READS (SAMPLE1__rep2__barcode02)",
                 "READ_ARCHITECTURE (CONTROL__rep1__barcode03)",
                 "READ_ARCHITECTURE (SAMPLE1__rep1__barcode01)",
                 "READ_ARCHITECTURE (SAMPLE1__rep2__barcode02)",
@@ -27,7 +27,7 @@
                 "SAMTOOLS_FLAGSTAT (SAMPLE1__rep2__barcode02)"
             ]
         ],
-        "timestamp": "2026-11-12T10:42:07.243665",
+        "timestamp": "2026-11-12T11:18:23.70692",
         "meta": {
             "nf-test": "0.9.5",
             "nextflow": "25.10.4"

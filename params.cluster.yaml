@@ -29,7 +29,9 @@ reference_dir: '/mnt/lustre/users/<you>/references/wei_linear_replicon'
 outdir:        './results'
 
 alignment:
-  tool: 'minimap2'
+  # 'dorado' reads bam_pass BAMs directly -- no FASTQ round trip, and the
+  # MM/ML modified-base tags are never touched. 'minimap2' is the alternative.
+  tool: 'dorado'
 
 # The defaults. They are here so that a run records the thresholds it used.
 junction:
