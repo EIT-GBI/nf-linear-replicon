@@ -59,26 +59,36 @@ Full step-by-step guide, written for someone who has not used Nextflow:
 version, on the cluster:
 
 ```bash
-# 1. a run folder for your settings and results, and a SEPARATE work folder for
-#    Nextflow's large temporary data, so you can delete it in one go later.
-#    Keep outdir inside the run folder: results are published as hard links
-#    into the work folder, and a hard link cannot cross filesystems.
-DATASET_NAME=20260928
-RUN_DIR=/mnt/lustre/users/$USER/data/wei_linear_replicon/$DATASET_NAME
-export NXF_WORK=/mnt/lustre/users/$USER/nf-work/$DATASET_NAME
+# 1. a run folder, which sits with the data, and a SEPARATE work folder for
+#    Nextflow's large temporary data, which gets deleted wholesale at the end.
+#    Both on /mnt/lustre: results are published as hard links into the work
+#    folder, and a hard link cannot cross filesystems.
+DATASET_NAME=20261023
+```
+```bash
+PROJECT=/mnt/lustre/projects/bioinformatics
+RUN_DIR=$PROJECT/data/ont/wei_linear_replicon/$DATASET_NAME
+export NXF_WORK=$PROJECT/runs/$DATASET_NAME
+
 mkdir -p $RUN_DIR $NXF_WORK
 cd $RUN_DIR
 
 # 2. your samplesheet (see below) goes here, then fetch the settings file and
-#    edit the three paths at the top of it
+#    edit the two paths at the top of it. samplesheet: must name the CSV file,
+#    not the folder it is in.
 curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params.cluster.yaml
 nano params.cluster.yaml
 
 # 3. submit. One Slurm job, which is Nextflow itself; it submits the rest.
+#    sbatch, not a foreground run: a run on the login node dies with your shell.
 module load nextflow
 sbatch -J nf-linear-replicon -p cpu -t 2-00:00:00 \
   --wrap='nextflow run EIT-GBI/nf-linear-replicon -latest -params-file params.cluster.yaml -profile cluster -resume'
 ```
+
+> **Export `NXF_WORK` in the same shell you submit from, every time.** Without
+> it Nextflow starts a fresh work folder, `-resume` finds nothing, and every
+> alignment runs again.
 
 `-resume` reuses everything already finished, so changing a threshold re-runs
 the analysis in minutes without realigning anything.

@@ -6,14 +6,17 @@
 #   curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params.cluster.yaml
 #   nano params.cluster.yaml
 #
-#   export NXF_WORK=/mnt/lustre/users/$USER/nf-work/20260928   # before submitting
+#   export NXF_WORK=/mnt/lustre/projects/bioinformatics/runs/20261023   # before submitting
 #   module load nextflow
 #   sbatch -J nf-linear-replicon -p cpu -t 2-00:00:00 \
 #     --wrap='nextflow run EIT-GBI/nf-linear-replicon -latest \
 #             -params-file params.cluster.yaml -profile cluster -resume'
 #
-# NXF_WORK is where Nextflow keeps its large temporary data. Point it somewhere
-# separate from this folder so you can delete it in one go when the run is done.
+# NXF_WORK is where Nextflow keeps its large temporary data -- hundreds of GB of
+# intermediate BAMs. Point it well away from this folder so it can be deleted
+# wholesale at the end without ever touching the results. Export it in the same
+# shell you submit from, every time: without it Nextflow starts a fresh work
+# folder and -resume reuses nothing.
 #
 # The reference folder holds the host genome and one FASTA per construct. The
 # samplesheet names them in its reference_genome and additional_reference
@@ -21,8 +24,9 @@
 #
 # Full guide: docs/running-the-pipeline.md
 
-samplesheet:   '/mnt/lustre/users/<you>/data/wei_linear_replicon/20260928/samplesheet.csv'
-reference_dir: '/mnt/lustre/users/<you>/references/wei_linear_replicon'
+# The samplesheet is the CSV FILE, not the folder it sits in.
+samplesheet:   '/mnt/lustre/projects/bioinformatics/data/ont/wei_linear_replicon/20261023/samplesheet.csv'
+reference_dir: '/mnt/lustre/projects/bioinformatics/data/ont/wei_linear_replicon/ref'
 
 # Results are published as hard links into the work folder, and a hard link
 # cannot cross filesystems -- so keep outdir inside the run folder.
@@ -45,6 +49,14 @@ junction:
 matrix:
   cluster_tolerance: 2000   # breakpoints within this distance are one locus
   min_total_reads: 2
+
+# How many alignments run at once. The limit is DISK, not cores: each one
+# writes a sorted BAM about the size of its input (30 GB+ for a PromethION
+# barcode) plus a sort temporary of the same again. Too many at once and the
+# writes fail -- dorado reports that as
+#   Error writing to BAM temporary file, error code -1
+# and aborts with exit 134, which looks like a crash but is not.
+max_parallel_alignments: 6
 
 # Per-read architecture: slower, and worth it once you have a shortlist
 architecture:

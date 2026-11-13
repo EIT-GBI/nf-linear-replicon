@@ -96,30 +96,41 @@ Each dataset gets two folders on Lustre, not in your home folder:
 Give your dataset a name — the sequencing run date is a good one:
 
 ```bash
-DATASET_NAME=20260928
+DATASET_NAME=20261023
 ```
 
-Then make both folders and go into the run folder:
+Then set both paths and go into the run folder:
 
 ```bash
-RUN_DIR=/mnt/lustre/users/$USER/data/wei_linear_replicon/$DATASET_NAME
-export NXF_WORK=/mnt/lustre/users/$USER/nf-work/$DATASET_NAME
+PROJECT=/mnt/lustre/projects/bioinformatics
+
+RUN_DIR=$PROJECT/data/ont/wei_linear_replicon/$DATASET_NAME
+export NXF_WORK=$PROJECT/runs/$DATASET_NAME
+
 mkdir -p $RUN_DIR $NXF_WORK
 cd $RUN_DIR
 ```
 
-`NXF_WORK` is the setting Nextflow reads to know where its work folder is.
-**Set it before you submit, every time**, or Nextflow drops a `work/` folder
-inside your run folder instead.
+The run folder sits **with the data** it belongs to, under
+`data/ont/<project>/<run>`. The work folder is deliberately somewhere else
+entirely — a top-level `runs/<run>` — because it holds hundreds of gigabytes of
+intermediate BAMs and gets deleted wholesale in
+[Step 9](#step-9--clean-up-and-move-the-results-off-lustre). Keeping it out of
+the run folder means that deletion can never touch your results.
 
-> These shell settings only last until you log out. If you log out before
-> [Step 6](#step-6--start-the-run), run both blocks again with the same dataset
-> name before you submit.
+`NXF_WORK` is the setting Nextflow reads to know where its work folder is.
+
+> **Export `NXF_WORK` before every submit, in the same shell.** It is an
+> environment variable, so it is gone when you log out. Submit without it and
+> Nextflow starts a *fresh* work folder inside your run folder — which means
+> `-resume` finds nothing and every alignment runs again from scratch. This is
+> the single easiest way to throw away a day of compute.
 
 > **Keep `outdir` inside the run folder** (the settings file has it as
 > `./results`). The pipeline publishes results as **hard links** into the work
 > folder, so they cost no extra disk space — but a hard link cannot cross
-> filesystems, so an `outdir` on a different disk from `NXF_WORK` fails.
+> filesystems. Both paths above are on `/mnt/lustre`, so this works; an `outdir`
+> in your home directory would not.
 
 **Do not copy reads that are already on Lustre.** Point the samplesheet at
 them where they are, or make a folder of shortcuts — a shortcut takes no space:
@@ -137,16 +148,19 @@ The pipeline needs one folder holding the host genome **and** each construct,
 as separate FASTA files:
 
 ```text
-/mnt/lustre/users/YOU/references/wei_linear_replicon/
-├── CHOWT_genome.fa
-├── LP247_maxi.fa
-└── Integration_control_W55.fa
+/mnt/lustre/projects/bioinformatics/data/ont/wei_linear_replicon/ref/
+├── GCF_003668045.3_CriGri-PICRH-1.0_genomic.fna
+├── LP_pK1E_NLuc_HygR_SmR_mKate2.fa
+└── Phi29_LP.fa
 ```
 
 ```bash
-REF_DIR=/mnt/lustre/users/$USER/references/wei_linear_replicon
+REF_DIR=$PROJECT/data/ont/wei_linear_replicon/ref
 mkdir -p $REF_DIR
 ```
+
+One level up from the run folders, because references are shared by every run
+of the project and should be built once.
 
 Again: if a genome is already on Lustre, link it rather than copying it:
 
@@ -209,12 +223,12 @@ curl -O https://raw.githubusercontent.com/EIT-GBI/nf-linear-replicon/main/params
 nano params.cluster.yaml
 ```
 
-Change the three paths at the top, replacing `YOU` with your username
-(`echo $USER` if unsure):
+Change the two paths at the top to your own run. `samplesheet` must name the
+**CSV file**, not the folder it sits in:
 
 ```yaml
-samplesheet:   "/mnt/lustre/users/YOU/data/wei_linear_replicon/20260928/samplesheet.csv"
-reference_dir: "/mnt/lustre/users/YOU/references/wei_linear_replicon"
+samplesheet:   "/mnt/lustre/projects/bioinformatics/data/ont/wei_linear_replicon/20261023/samplesheet.csv"
+reference_dir: "/mnt/lustre/projects/bioinformatics/data/ont/wei_linear_replicon/ref"
 outdir:        "./results"
 ```
 
@@ -230,6 +244,7 @@ the thresholds it was given. The ones worth knowing:
 | `matrix: cluster_tolerance` | 2000 bp. Breakpoints this close are called one locus |
 | `matrix: min_total_reads` | 2. Clusters with fewer reads in total are dropped from the matrix |
 | `architecture: enabled` | `false`. Set `true` for the per-read structure report once you have a shortlist |
+| `max_parallel_alignments` | 6. How many barcodes align at once. The limit is **disk**, not cores — see below |
 | `alignment: tool` | `dorado` (default), which reads your `bam_pass` BAMs directly. `minimap2` is the alternative and decodes them to FASTQ first |
 
 Save with `Ctrl-O`, `Enter`, then `Ctrl-X`.
@@ -239,7 +254,7 @@ Save with `Ctrl-O`, `Enter`, then `Ctrl-X`.
 ## Step 6 — Start the run
 
 From your run folder, check the work folder is still set — this should print the
-`nf-work` path from Step 2, not an empty line:
+`runs/<dataset>` path from Step 2, not an empty line:
 
 ```bash
 echo $NXF_WORK
@@ -262,6 +277,12 @@ Submitted batch job 519583
 Write that number down. The run continues on its own, even if you close your
 laptop.
 
+> **Use `sbatch`, not a plain `nextflow run` on the login node.** A foreground
+> run dies the moment your shell does — closed laptop, dropped SSH, logout —
+> and takes every queued pipeline job with it. The work already done survives
+> in the work folder, so `-resume` picks it up, but hours of alignment can be
+> left half-finished for no reason.
+
 | Part | What it does |
 | --- | --- |
 | `module load nextflow` | Makes Nextflow available. The job inherits it, and `NXF_WORK`, from your session |
@@ -282,8 +303,68 @@ tail -30 slurm-519583.out        # your own job number
 ```
 
 A step showing `PD` is queued, not broken. Expect the alignment steps to be the
-long ones — the CHO genome index is built once per genome/construct pair, then
-reused.
+long ones: 45–60 minutes per barcode for a full PromethION run, of which the
+first few minutes are building the minimap2 index of the host genome.
+
+### If an aligner task exits 134 or 1
+
+```
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  Error writing to BAM temporary file, error code -1
+```
+
+Exit 134 is SIGABRT, which looks like a crash but here means a **write failed**.
+Each aligner writes a sorted BAM roughly the size of its input — 30 GB+ for a
+PromethION barcode — plus a sort temporary of about the same again. Run 27
+barcodes at once and that is well over a terabyte being written simultaneously,
+which this filesystem does not always take kindly to. (The same mount has
+produced `copy_file_range()` returning `ENODATA` and a samtools sort losing its
+merge with `BGZF_ERR_IO`; `BUILD_REFERENCE` uses `dd` instead of `cat` because
+of the first of those.)
+
+The same failure also shows up as a **silent exit 1**: dorado finishes
+aligning (`Output records written: N` in the log), starts its sort, fails to
+write a temporary, and unwinds without printing anything at all. The tell is the
+work directory — `aligned/` holds a stray `*.bam.0.tmp` and no final BAM:
+
+```bash
+cd <work dir from the error>
+tr '\r' '\n' < .command.err | grep -vi 'records written' | tail -30
+ls -la aligned/
+```
+
+(Pipe `.command.err` through `tr` like that whenever you read it: dorado's
+progress output is carriage-return based, so a plain `cat` in a terminal
+overwrites the interesting lines with the last progress line.)
+
+The pipeline retries both 134 and 1 on `DORADO_ALIGNER` automatically. If tasks keep failing there, lower
+the number that run at once rather than chasing memory — `MaxRSS` in
+`sacct -j <id> --format=JobID,State,ExitCode,MaxRSS,ReqMem,Elapsed` will show
+the job was nowhere near its limit:
+
+```bash
+# resubmit, keeping everything already aligned
+sbatch -J nf-linear-replicon -p cpu -t 2-00:00:00 \
+  --wrap='nextflow run EIT-GBI/nf-linear-replicon -latest -params-file params.cluster.yaml -profile cluster -resume --max_parallel_alignments 4'
+```
+
+Retrying is a workaround, not the cure. The real fix is to stop using
+dorado's built-in sorter — `dorado aligner` writing to stdout, piped into
+`samtools sort` — which needs a small local module, because the dorado image
+does not ship samtools. It has not been done yet for one reason only: renaming
+the process invalidates every cached alignment, and re-running them costs about
+eight hours each. Worth doing between datasets, not in the middle of one.
+
+Before assuming it is space, check that it is not:
+
+```bash
+df -h /mnt/lustre
+dd if=/dev/zero of=$NXF_WORK/spacetest bs=1M count=50000; rm -f $NXF_WORK/spacetest
+```
+
+`Disk quota exceeded` or `No space left on device` is a real ceiling and the
+work folder has to move. A clean 50 GB write means capacity is fine and the
+answer is fewer simultaneous writers.
 
 > Please check this way, rather than leaving a command running that follows the
 > log: the login node is shared, and a run continues perfectly well without
@@ -354,8 +435,9 @@ the positions you shortlisted — not the full BAMs.
 If you have logged out since Step 2, set the names again first:
 
 ```bash
-DATASET_NAME=20260928
-cd /mnt/lustre/users/$USER/data/wei_linear_replicon/$DATASET_NAME
+DATASET_NAME=20261023
+PROJECT=/mnt/lustre/projects/bioinformatics
+cd $PROJECT/data/ont/wei_linear_replicon/$DATASET_NAME
 ```
 
 The published results are hard links into the work folder — the same files under
@@ -363,7 +445,7 @@ two names, costing space only once — so deleting the work folder leaves them
 intact:
 
 ```bash
-rm -rf /mnt/lustre/users/$USER/nf-work/$DATASET_NAME
+rm -rf $PROJECT/runs/$DATASET_NAME
 ```
 
 > Only once you are happy with the run: a future `-resume` then has to start
@@ -375,7 +457,7 @@ only works as scratch space if finished data moves off promptly:
 ```bash
 module load gbi
 gbi data move --detach \
-  /mnt/lustre/users/$USER/data/wei_linear_replicon/$DATASET_NAME/results \
+  $PROJECT/data/ont/wei_linear_replicon/$DATASET_NAME/results \
   /mnt/user-data/$USER/wei_linear_replicon/$DATASET_NAME/results
 ```
 
